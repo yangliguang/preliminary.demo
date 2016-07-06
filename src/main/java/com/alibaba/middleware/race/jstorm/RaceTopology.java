@@ -41,6 +41,9 @@ public class RaceTopology {
 
         try {
             StormSubmitter.submitTopology(topologyName, conf, builder.createTopology());
+            //begin by Young
+            
+            //end by Young
         } catch (Exception e) {
             // TODO Auto-generated catch block
             e.printStackTrace();
