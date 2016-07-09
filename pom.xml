@@ -71,7 +71,7 @@
             <version>2.1.1</version>
             <!--跑jstorm本地测试或者本地需要kryo相关操作时，请将provided屏蔽，
                         提交到jstorm集群的时候，记得加上provided的-->
-            <!-- <scope>provided</scope> -->
+            <scope>provided</scope>
             <exclusions>
                 <exclusion>
                     <groupId>org.slf4j</groupId>
@@ -112,6 +112,19 @@
 			<artifactId>kryo</artifactId>
 			<version>3.0.3</version>
 		</dependency>
+		
+		<!--  begin add to use redis -->
+		<dependency>
+			<groupId>redis.clients</groupId>
+			<artifactId>jedis</artifactId>
+			<version>2.1.0</version>
+		</dependency>
+		<dependency>
+			<groupId>commons-pool</groupId>
+		    <artifactId>commons-pool</artifactId>
+		    <version>1.5.6</version>
+		</dependency>
+		<!-- end add to use redis -->
 
     </dependencies>
 </project>

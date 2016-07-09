@@ -3,6 +3,8 @@ package com.alibaba.middleware.race.model;
 import java.io.Serializable;
 import java.util.Random;
 
+import com.young.utils.TimeUtil;
+
 
 /**
  * 我们后台RocketMq存储的交易消息模型类似于PaymentMessage，选手也可以自定义
@@ -71,7 +73,7 @@ public class PaymentMessage implements Serializable{
                 ", paySource=" + paySource +
                 ", payPlatform=" + payPlatform +
                 ", createTime=" + createTime +
-                '}';
+                '}'+TimeUtil.timeStamp2Date(createTime);
     }
 
     public long getOrderId() {

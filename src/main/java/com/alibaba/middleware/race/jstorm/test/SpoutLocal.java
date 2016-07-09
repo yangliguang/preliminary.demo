@@ -11,6 +11,8 @@ import backtype.storm.utils.Utils;
 import com.alibaba.jstorm.utils.JStormUtils;
 import com.alibaba.middleware.race.RaceConfig;
 import com.alibaba.middleware.race.RaceUtils;
+import com.alibaba.middleware.race.Tair.TairOperatorImpl;
+import com.alibaba.middleware.race.model.OrderMessage;
 import com.alibaba.middleware.race.model.PaymentMessage;
 import com.alibaba.rocketmq.client.consumer.DefaultMQPushConsumer;
 import com.alibaba.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext;
@@ -19,6 +21,7 @@ import com.alibaba.rocketmq.client.consumer.listener.MessageListenerConcurrently
 import com.alibaba.rocketmq.client.exception.MQClientException;
 import com.alibaba.rocketmq.common.message.MessageExt;
 import com.esotericsoftware.minlog.Log;
+import com.redis.RedisClient;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,8 +47,13 @@ implements MessageListenerConcurrently{
     boolean isStatEnable;
     int sendNumPerNexttuple;
     
+    //add by Young
+//    TairOperatorImpl tairOperator = new TairOperatorImpl(RaceConfig.TairConfigServer, RaceConfig.TairSalveConfigServer,
+//            RaceConfig.TairGroup, RaceConfig.TairNamespace); 
+    
     //begin by Young
     private transient DefaultMQPushConsumer consumer; 
+    RedisClient redis;
     //end by Young
 
     private static final String[] CHOICES = {"marry had a little lamb whos fleese was white as snow",
@@ -64,6 +72,8 @@ implements MessageListenerConcurrently{
 //        isStatEnable = JStormUtils.parseBoolean(conf.get("is.stat.enable"), false);
     	
     	LOG.error("Young：初始化消费者");
+    	redis = new RedisClient();
+    	LOG.error("Young:初始化redis!!!");
     	consumer = new DefaultMQPushConsumer(RaceConfig.MetaConsumerGroup); 
     	consumer.setNamesrvAddr("127.0.0.1:9876");  
     	
@@ -172,12 +182,46 @@ implements MessageListenerConcurrently{
 	
 	//begin Young
 	public ConsumeConcurrentlyStatus doPayTopic(byte[] body){
-		PaymentMessage paymentMessage = RaceUtils.readKryoObject(PaymentMessage.class, body);
+		PaymentMessage pm = RaceUtils.readKryoObject(PaymentMessage.class, body);
 		LOG.error("处理PAY!!");
-		System.out.println(paymentMessage);
+		System.out.println(pm);
+		Long millisTime = pm.getCreateTime();
+		Long minuteTime = (millisTime / 1000 / 60) * 60;
+		
+//		String salerId = (String)tairOperator.get(pm.getOrderId());
+		String salerId = redis.read(pm.getOrderId()+"");
+		if(salerId.startsWith("tb")){
+			String key = RaceConfig.prex_taobao + minuteTime;
+			if(redis.read(key) == null)
+				redis.write(key, pm.getPayAmount()+"");
+			else
+				redis.write(key, (Double.parseDouble(redis.read(key)) + pm.getPayAmount()) + "");
+		} else if(salerId.startsWith("tm")){
+			String key = RaceConfig.prex_tmall + minuteTime;
+			if(redis.read(key) == null)
+				redis.write(key, pm.getPayAmount()+"");
+		}
+		
+		
+//		tairOperator.write(RaceConfig.prex_tmall + minuteTime, money);
+		
 		return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;  
 	}
-	public void putTaobaoTradeToTair(byte[] body){LOG.error("处理淘宝订单！！");}
-	public void putTmallTradeToTair(byte[] body){LOG.error("处理天猫订单！！");}
-	//end Young
+	public void putTaobaoTradeToTair(byte[] body){
+		LOG.error("处理淘宝订单！！");
+		OrderMessage om = RaceUtils.readKryoObject(OrderMessage.class, body);
+		System.out.println(om);
+//		tairOperator.write(om.getOrderId(), om.getSalerId());
+		redis.write(om.getOrderId()+"", om.getSalerId());
+		System.out.println(redis.read(om.getOrderId()+""));
+		
+	}
+	public void putTmallTradeToTair(byte[] body){
+		LOG.error("处理天猫订单！！");
+		OrderMessage om = RaceUtils.readKryoObject(OrderMessage.class, body);
+		System.out.println(om);
+//		tairOperator.write(om.getOrderId(), om.getSalerId());
+		redis.write(om.getOrderId()+"", om.getSalerId());
+		redis.read(om.getOrderId()+"");
+	}
 }

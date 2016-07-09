@@ -4,17 +4,31 @@ import backtype.storm.spout.SpoutOutputCollector;
 import backtype.storm.task.TopologyContext;
 import backtype.storm.topology.IRichSpout;
 import backtype.storm.topology.OutputFieldsDeclarer;
+import backtype.storm.topology.base.BaseRichSpout;
 import backtype.storm.tuple.Fields;
 import backtype.storm.tuple.Values;
 import backtype.storm.utils.Utils;
 import com.alibaba.jstorm.utils.JStormUtils;
+import com.alibaba.middleware.race.RaceConfig;
+import com.alibaba.middleware.race.RaceUtils;
+import com.alibaba.middleware.race.Tair.TairOperatorImpl;
+import com.alibaba.middleware.race.model.OrderMessage;
+import com.alibaba.middleware.race.model.PaymentMessage;
+import com.alibaba.rocketmq.client.consumer.DefaultMQPushConsumer;
+import com.alibaba.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext;
+import com.alibaba.rocketmq.client.consumer.listener.ConsumeConcurrentlyStatus;
+import com.alibaba.rocketmq.client.consumer.listener.MessageListenerConcurrently;
+import com.alibaba.rocketmq.client.exception.MQClientException;
+import com.alibaba.rocketmq.common.message.MessageExt;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 
-public class RaceSentenceSpout implements IRichSpout {
+public class RaceSentenceSpout extends BaseRichSpout implements IRichSpout,MessageListenerConcurrently{
     private static Logger LOG = LoggerFactory.getLogger(RaceSentenceSpout.class);
     SpoutOutputCollector _collector;
     Random _rand;
@@ -22,6 +36,15 @@ public class RaceSentenceSpout implements IRichSpout {
     long startTime;
     boolean isStatEnable;
     int sendNumPerNexttuple;
+    
+    //begin add Young
+    //end add Young
+    
+    //begin add Young
+    TairOperatorImpl tairOperator = new TairOperatorImpl(RaceConfig.TairConfigServer, RaceConfig.TairSalveConfigServer,
+          RaceConfig.TairGroup, RaceConfig.TairNamespace); 
+    private transient DefaultMQPushConsumer consumer; 
+    //end add Young
 
     private static final String[] CHOICES = {"marry had a little lamb whos fleese was white as snow",
             "and every where that marry went the lamb was sure to go",
@@ -36,6 +59,24 @@ public class RaceSentenceSpout implements IRichSpout {
         startTime = System.currentTimeMillis();
         sendNumPerNexttuple = JStormUtils.parseInt(conf.get("send.num.each.time"), 1);
         isStatEnable = JStormUtils.parseBoolean(conf.get("is.stat.enable"), false);
+        
+      //begin add Young
+        consumer = new DefaultMQPushConsumer(RaceConfig.MetaConsumerGroup); 
+    	try {  
+            consumer.subscribe(RaceConfig.MqTmallTradeTopic, "*");  
+            consumer.subscribe(RaceConfig.MqTaobaoTradeTopic, "*");  
+            consumer.subscribe(RaceConfig.MqPayTopic, "*");  
+    	} catch (MQClientException e) {  
+    		e.printStackTrace();  
+    	}  
+        consumer.registerMessageListener(this);  
+        try {  
+        	consumer.start();  
+        } catch (MQClientException e) {  
+        	e.printStackTrace();  
+        }
+        this._collector = collector;  
+      //end add Young
     }
 
     public void nextTuple() {
@@ -93,4 +134,78 @@ public class RaceSentenceSpout implements IRichSpout {
         // TODO Auto-generated method stub
         return null;
     }
+
+	/* (non-Javadoc)
+	 * @see com.alibaba.rocketmq.client.consumer.listener.MessageListenerConcurrently#consumeMessage(java.util.List, com.alibaba.rocketmq.client.consumer.listener.ConsumeConcurrentlyContext)
+	 */
+	@Override
+	public ConsumeConcurrentlyStatus consumeMessage(List<MessageExt> msgs,
+			ConsumeConcurrentlyContext context) {
+		// TODO Auto-generated method stub
+		for (MessageExt msg : msgs) {  
+            byte[] body = msg.getBody();  
+            if (body.length == 2 && body[0] == 0 && body[1] == 0) {  
+                  
+                LOG.error("Young:Got the end signal");  
+                _collector.emit("stop",new Values("stop"));  
+                continue;  
+            }  
+            if (msg.getTopic().equals(RaceConfig.MqPayTopic)) {  
+                return doPayTopic(body);  
+            }else if (msg.getTopic().equals(RaceConfig.MqTaobaoTradeTopic)) {  
+                putTaobaoTradeToTair(body);  
+                return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;  
+            } else if (msg.getTopic().equals(RaceConfig.MqTmallTradeTopic)) {  
+                putTmallTradeToTair(body);  
+                return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;  
+            }else {  
+                return ConsumeConcurrentlyStatus.RECONSUME_LATER;  
+            }  
+        }  
+        return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;  
+	}
+	//begin Young
+		public ConsumeConcurrentlyStatus doPayTopic(byte[] body){
+			PaymentMessage pm = RaceUtils.readKryoObject(PaymentMessage.class, body);
+			LOG.error("处理PAY!!");
+			System.out.println(pm);
+			Long millisTime = pm.getCreateTime();
+			Long minuteTime = (millisTime / 1000 / 60) * 60;
+			
+			String salerId = (String)tairOperator.get(pm.getOrderId());
+//			String salerId = redis.read(pm.getOrderId()+"");
+			if(salerId.startsWith("tb")){
+				String key = RaceConfig.prex_taobao + minuteTime;
+				if(tairOperator.get(key) == null)
+					tairOperator.write(key, pm.getPayAmount()+"");
+				else
+					tairOperator.write(key, (Double)tairOperator.get(key) + pm.getPayAmount());
+			} else if(salerId.startsWith("tm")){
+				String key = RaceConfig.prex_tmall + minuteTime;
+				if(tairOperator.get(key) == null)
+					tairOperator.write(key, pm.getPayAmount()+"");
+			}
+			
+			
+//			tairOperator.write(RaceConfig.prex_tmall + minuteTime, money);
+			
+			return ConsumeConcurrentlyStatus.CONSUME_SUCCESS;  
+		}
+		public void putTaobaoTradeToTair(byte[] body){
+			LOG.error("处理淘宝订单！！");
+			OrderMessage om = RaceUtils.readKryoObject(OrderMessage.class, body);
+			System.out.println(om);
+			tairOperator.write(om.getOrderId(), om.getSalerId());
+//			redis.write(om.getOrderId()+"", om.getSalerId());
+//			System.out.println(redis.read(om.getOrderId()+""));
+			
+		}
+		public void putTmallTradeToTair(byte[] body){
+			LOG.error("处理天猫订单！！");
+			OrderMessage om = RaceUtils.readKryoObject(OrderMessage.class, body);
+			System.out.println(om);
+			tairOperator.write(om.getOrderId(), om.getSalerId());
+//			redis.write(om.getOrderId()+"", om.getSalerId());
+//			redis.read(om.getOrderId()+"");
+		}
 }
